@@ -22,8 +22,8 @@ public class DataHarvester : BackgroundService
             string message = sentiment > 0 ? "Positive vibe!" : "System alert: Negative!";
             string color = sentiment > 0 ? "#0000FF" : "#FF0000";
 
-            await _hubContext.Clients.All.SendAsync("ReceivePulse", 
-                new Pulse(sentiment, message, color), 
+            await _hubContext.Clients.All.SendAsync("ReceivePulse",
+                new Pulse(sentiment, message, color, "DataHarvester", DateTime.UtcNow),
                 stoppingToken);
 
             await Task.Delay(2000, stoppingToken); // Пауза 2 секунды
