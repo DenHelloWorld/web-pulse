@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using System.Threading.Channels;
 using WebPulse.Api.Hubs;
+using WebPulse.Api.Constants;
 
 namespace WebPulse.Api.Services;
 
@@ -12,13 +13,15 @@ public class PulseGenerationService : BackgroundService
     private readonly Timer _timer;
     private readonly List<ICommentProvider> _providers;
 
-    public PulseGenerationService(IServiceProvider serviceProvider, ILogger<PulseGenerationService> logger)
+    public PulseGenerationService(IServiceProvider serviceProvider, ILogger<PulseGenerationService> logger, IEnumerable<ICommentProvider> providers)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
         _pulseChannel = Channel.CreateUnbounded<PulseData>();
-        _providers = new List<ICommentProvider>();
+        _providers = providers.ToList();
         _timer = new Timer(GenerateTestPulse, null, Timeout.Infinite, Timeout.Infinite);
+        
+        _logger.LogInformation("PulseGenerationService initialized with {ProviderCount} providers", _providers.Count);
     }
 
     public void RegisterProvider(ICommentProvider provider)
@@ -35,7 +38,7 @@ public class PulseGenerationService : BackgroundService
         var processorTask = ProcessPulsesAsync(stoppingToken);
         
         // Запускаем генерацию тестовых данных каждые 2 секунды
-        _timer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(2));
+        _timer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(ProviderConstants.TestGenerator.PollingIntervalSeconds));
         
         // Периодически опрашиваем провайдеров
         var providerTask = PollProvidersAsync(stoppingToken);
@@ -64,7 +67,7 @@ public class PulseGenerationService : BackgroundService
                     Timestamp: pulseData.Timestamp
                 );
                 
-                await hubContext.Clients.Group(PulseHub.PulseGroupName).SendAsync("ReceivePulse", pulse, stoppingToken);
+                await hubContext.Clients.Group(PulseHub.PulseGroupName).SendAsync(ProviderConstants.SignalR.ReceiveMethod, pulse, stoppingToken);
                 
                 _logger.LogDebug("Sent pulse: {Text} -> {Sentiment:F2}", pulseData.Text.Substring(0, Math.Min(30, pulseData.Text.Length)), sentiment);
             }
@@ -108,7 +111,7 @@ public class PulseGenerationService : BackgroundService
                 _logger.LogError(ex, "Error in provider polling loop");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(ProviderConstants.Reddit.PollingIntervalSeconds), stoppingToken);
         }
     }
 
@@ -130,7 +133,7 @@ public class PulseGenerationService : BackgroundService
         
         _pulseChannel.Writer.TryWrite(new PulseData(
             Text: randomMessage,
-            Source: "TestGenerator",
+            Source: ProviderConstants.TestGenerator.SourceName,
             Timestamp: DateTime.UtcNow
         ));
     }
@@ -139,9 +142,9 @@ public class PulseGenerationService : BackgroundService
     {
         return sentiment switch
         {
-            > 0.3f => "#00ff00",  // Зеленый для позитивных
-            < -0.3f => "#ff0000", // Красный для негативных
-            _ => "#ffff00"         // Желтый для нейтральных
+            > ProviderConstants.UI.PositiveThreshold => ProviderConstants.UI.PositiveColor,
+            < ProviderConstants.UI.NegativeThreshold => ProviderConstants.UI.NegativeColor,
+            _ => ProviderConstants.UI.NeutralColor
         };
     }
 

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.SignalR;
+using WebPulse.Api.Constants;
 
 namespace WebPulse.Api.Hubs;
 
@@ -8,7 +9,7 @@ public record Pulse(double Sentiment, string Message, string Color, string Sourc
 public class PulseHub : Hub
 {
     // Группа для всех подключенных клиентов
-    public const string PulseGroupName = "AllPulses";
+    public const string PulseGroupName = ProviderConstants.SignalR.GroupName;
     
     public override async Task OnConnectedAsync()
     {
@@ -25,6 +26,6 @@ public class PulseHub : Hub
     // Метод для отправки pulse всем клиентам
     public async Task SendPulseToAll(Pulse pulse)
     {
-        await Clients.Group(PulseGroupName).SendAsync("ReceivePulse", pulse);
+        await Clients.Group(PulseGroupName).SendAsync(ProviderConstants.SignalR.ReceiveMethod, pulse);
     }
 }
