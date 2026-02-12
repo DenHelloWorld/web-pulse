@@ -1,6 +1,6 @@
 # 🛰️ Web-Pulse Global Backend Implementation Plan
 
-## 1. Core Architecture (Provider-Consumer Pattern)
+## 1. Core Architecture (Provider-Consumer Pattern) ✅
 The goal is to move from dummy data to a scalable multi-stream engine using `System.Threading.Channels`.
 
 * **`ICommentProvider` Interface**: Standardizes how data is fetched regardless of the source.
@@ -11,7 +11,7 @@ The goal is to move from dummy data to a scalable multi-stream engine using `Sys
 
 ---
 
-## 2. Intelligence Layer (ML.NET)
+## 2. Intelligence Layer (ML.NET) ✅
 Replacing `Random.Shared.Next()` with a real-time sentiment analysis engine.
 
 * **`SentimentAnalysisService`**: A Singleton service that loads the pre-trained `.zip` model once.
@@ -22,22 +22,22 @@ Replacing `Random.Shared.Next()` with a real-time sentiment analysis engine.
 
 ---
 
-## 3. Global Data Providers
+## 3. Global Data Providers 🔶 (Частично)
 The "tentacles" of the system that grab real-world data.
 
-| Provider | Method | Logic |
-| :--- | :--- | :--- |
-| **Reddit** | `HttpClient` | Polls `/r/all/new.json` every 5-10 seconds. |
-| **RSS News** | `SyndicationReader` | Parses headlines from Reuters, BBC, and AP News. |
-| **YouTube Chat** | `LiveChat API` | Hooks into the most active news stream's chat ID. |
+| Provider | Method | Logic | Status |
+| :--- | :--- | :--- | :--- |
+| **Reddit** | `HttpClient` | Polls `/r/all/new.json` every 5-10 seconds. | ✅ |
+| **RSS News** | `SyndicationReader` | Parses headlines from Reuters, BBC, and AP News. | ❌ |
+| **YouTube Chat** | `LiveChat API` | Hooks into the most active news stream's chat ID. | ❌ |
 
 ---
 
-## 4. Real-time Communication (SignalR Hub)
+## 4. Real-time Communication (SignalR Hub) 🔶 (Частично)
 Connecting the analyzed data to the Phaser frontend.
 
-* **Throttling Logic**: Prevents "Spam Death" by limiting the hub to a maximum of $X$ messages per second.
-* **Enhanced Payload**: Sending rich objects to Phaser:
+* **Throttling Logic**: Prevents "Spam Death" by limiting the hub to a maximum of $X$ messages per second. ❌
+* **Enhanced Payload**: Sending rich objects to Phaser: ✅
     ```json
     {
       "sentiment": 0.75,
@@ -51,13 +51,13 @@ Connecting the analyzed data to the Phaser frontend.
 
 ---
 
-## 5. Administration & Monitoring
+## 5. Administration & Monitoring ❌
 * **`/api/stats`**: Returns real-time metrics (Messages per minute, current global mood).
 * **Dynamic Controls**: Toggle specific providers (e.g., "Mute Reddit") via HTTP POST.
 
 ---
 
-## 🛠 Tech Stack
+## 🛠 Tech Stack ✅
 * **Runtime**: .NET 9
 * **Real-time**: SignalR (WebSockets)
 * **Machine Learning**: ML.NET
