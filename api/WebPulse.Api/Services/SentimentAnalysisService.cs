@@ -1,5 +1,6 @@
 using Microsoft.ML;
 using Microsoft.Extensions.ObjectPool;
+using System.Text.RegularExpressions;
 using WebPulse.Api.Models;
 
 namespace WebPulse.Api.Services;
@@ -68,16 +69,20 @@ public class SentimentAnalysisService : ISentimentAnalysisService
     {
         if (string.IsNullOrWhiteSpace(text)) return 0;
 
+        // Data preprocessing: clean text
+        string cleanText = text.Replace("\n", " ").Replace("\r", " ").Trim();
+        cleanText = Regex.Replace(cleanText, @"\s+", " "); // Collapse multiple spaces
+
         var wrapper = _enginePool.Get();
         try
         {
-            var prediction = wrapper.Engine.Predict(new SentimentData { Text = text });
+            var prediction = wrapper.Engine.Predict(new SentimentData { Text = cleanText });
             float score = prediction.Probability > 0.5f 
                 ? prediction.Probability 
                 : -prediction.Probability;
                 
             _logger.LogDebug("ML.NET Analysis: '{Text}' -> {Score:F2} (Confidence: {Prob:F2})", 
-                text.Substring(0, Math.Min(30, text.Length)), score, prediction.Probability);
+                cleanText.Substring(0, Math.Min(30, cleanText.Length)), score, prediction.Probability);
             
             return score;
         }
