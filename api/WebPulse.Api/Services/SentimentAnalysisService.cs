@@ -1,5 +1,6 @@
 using Microsoft.ML;
-using Microsoft.ML.Data;
+using Microsoft.Extensions.ObjectPool;
+using WebPulse.Api.Models;
 
 namespace WebPulse.Api.Services;
 
@@ -8,100 +9,86 @@ public interface ISentimentAnalysisService
     Task<float> AnalyzeSentimentAsync(string text);
 }
 
+public class PredictionEngineWrapper
+{
+    public PredictionEngine<SentimentData, SentimentPrediction> Engine { get; set; } = null!;
+}
+
+public class PredictionEnginePolicy : IPooledObjectPolicy<PredictionEngineWrapper>
+{
+    private readonly MLContext _mlContext;
+    private readonly ITransformer _model;
+
+    public PredictionEnginePolicy(MLContext mlContext, ITransformer model)
+    {
+        _mlContext = mlContext;
+        _model = model;
+    }
+
+    public PredictionEngineWrapper Create()
+    {
+        return new PredictionEngineWrapper
+        {
+            Engine = _mlContext.Model.CreatePredictionEngine<SentimentData, SentimentPrediction>(_model)
+        };
+    }
+
+    public bool Return(PredictionEngineWrapper obj)
+    {
+        return true;
+    }
+}
+
 public class SentimentAnalysisService : ISentimentAnalysisService
 {
+    private readonly ObjectPool<PredictionEngineWrapper> _enginePool;
     private readonly ILogger<SentimentAnalysisService> _logger;
-    private readonly MLContext _mlContext;
-    private ITransformer? _model;
-    private PredictionEngine<SentimentData, SentimentPrediction>? _predictionEngine;
 
     public SentimentAnalysisService(ILogger<SentimentAnalysisService> logger)
     {
         _logger = logger;
-        _mlContext = new MLContext(seed: 0);
-        
-        // Инициализируем модель с предобученными данными
-        InitializeModel();
+        _enginePool = InitializeEnginePool();
     }
 
-    private void InitializeModel()
+    private ObjectPool<PredictionEngineWrapper> InitializeEnginePool()
     {
-        try
-        {
-            // Создаем обучающие данные (в реальном проекте это будет загружаться из файла)
-            var trainingData = new List<SentimentData>
-            {
-                new() { Text = "This is amazing! I love it", Label = true },
-                new() { Text = "Great work everyone", Label = true },
-                new() { Text = "Excellent performance", Label = true },
-                new() { Text = "Love the new features", Label = true },
-                new() { Text = "Fantastic job", Label = true },
-                new() { Text = "I hate this so much", Label = false },
-                new() { Text = "Terrible decision", Label = false },
-                new() { Text = "Worst experience ever", Label = false },
-                new() { Text = "Awful user interface", Label = false },
-                new() { Text = "Horrible product", Label = false },
-                new() { Text = "Not bad", Label = true },
-                new() { Text = "Could be better", Label = false },
-                new() { Text = "Pretty good", Label = true },
-                new() { Text = "Quite disappointing", Label = false },
-                new() { Text = "Outstanding quality", Label = true },
-                new() { Text = "Complete waste of time", Label = false },
-                new() { Text = "Highly recommend", Label = true },
-                new() { Text = "Never buying again", Label = false },
-                new() { Text = "Above expectations", Label = true },
-                new() { Text = "Below average", Label = false }
-            };
-
-            var dataView = _mlContext.Data.LoadFromEnumerable(trainingData);
-
-            // Создаем pipeline для обработки текста
-            var pipeline = _mlContext.Transforms.Text.FeaturizeText("Features", "Text")
-                .Append(_mlContext.BinaryClassification.Trainers.FastTree(labelColumnName: "Label", featureColumnName: "Features"));
-
-            // Обучаем модель
-            _model = pipeline.Fit(dataView);
-            
-            // Создаем prediction engine
-            _predictionEngine = _mlContext.Model.CreatePredictionEngine<SentimentData, SentimentPrediction>(_model);
-            
-            _logger.LogInformation("ML.NET sentiment analysis model initialized successfully");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to initialize ML.NET model, falling back to dummy logic");
-        }
+        var mlContext = new MLContext();
+        var modelPath = Path.Combine(AppContext.BaseDirectory, "Models", "sentiment.onnx");
+        var pipeline = mlContext.Transforms.ApplyOnnxModel(
+            modelFile: modelPath,
+            inputColumnNames: new[] { "Text" },
+            outputColumnNames: new[] { "Probability" },
+            gpuDeviceId: null,
+            fallbackToCpu: true);
+        var model = pipeline.Fit(mlContext.Data.LoadFromEnumerable(new List<SentimentData>()));
+        return ObjectPool.Create(new PredictionEnginePolicy(mlContext, model));
     }
 
     public async Task<float> AnalyzeSentimentAsync(string text)
     {
-        await Task.Delay(1); // Минимальная задержка для async
-        
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+
+        var wrapper = _enginePool.Get();
         try
         {
-            if (_predictionEngine == null)
-            {
-                // Fallback к dummy логике если модель не загрузилась
-                return await AnalyzeSentimentDummyAsync(text);
-            }
-
-            var inputData = new SentimentData { Text = text };
-            var prediction = _predictionEngine.Predict(inputData);
-            
-            // Конвертируем binary prediction в sentiment score (-1.0 to 1.0)
-            var sentimentScore = prediction.Prediction ? 
-                Math.Max(0.1f, prediction.Probability) : // Positive: 0.1 to 1.0
-                Math.Min(-0.1f, -prediction.Probability); // Negative: -1.0 to -0.1
-            
+            var prediction = wrapper.Engine.Predict(new SentimentData { Text = text });
+            float score = prediction.Probability > 0.5f 
+                ? prediction.Probability 
+                : -prediction.Probability;
+                
             _logger.LogDebug("ML.NET Analysis: '{Text}' -> {Score:F2} (Confidence: {Prob:F2})", 
-                text.Substring(0, Math.Min(30, text.Length)), sentimentScore, prediction.Probability);
+                text.Substring(0, Math.Min(30, text.Length)), score, prediction.Probability);
             
-            return sentimentScore;
+            return score;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error in ML.NET sentiment analysis, falling back to dummy logic");
+            _logger.LogError(ex, "ML.NET ONNX Prediction failed");
             return await AnalyzeSentimentDummyAsync(text);
+        }
+        finally
+        {
+            _enginePool.Return(wrapper);
         }
     }
 

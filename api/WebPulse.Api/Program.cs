@@ -1,6 +1,11 @@
 using WebPulse.Api.Hubs;
 using WebPulse.Api.Services;
 using WebPulse.Api.Constants;
+using WebPulse.Api.Models;
+using System.IO;
+using System.Threading.Channels;
+using Microsoft.Extensions.ML;
+using Microsoft.ML;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,7 +16,16 @@ builder.Services.AddOpenApi();
 builder.Services.AddSignalR();
 
 // Регистрация наших сервисов
+// 1. Создаем высокопроизводительный канал
+builder.Services.AddSingleton(Channel.CreateBounded<RawComment>(new BoundedChannelOptions(1000) 
+{ 
+    FullMode = BoundedChannelFullMode.DropOldest 
+}));
+
+// 2. Единый сервис анализа
 builder.Services.AddSingleton<ISentimentAnalysisService, SentimentAnalysisService>();
+
+// 3. Оставляем только ОДИН сервис обработки (PulseGenerationService)
 builder.Services.AddHostedService<PulseGenerationService>();
 
 // Регистрация провайдеров данных

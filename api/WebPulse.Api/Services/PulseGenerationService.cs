@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.SignalR;
 using System.Threading.Channels;
 using WebPulse.Api.Hubs;
 using WebPulse.Api.Constants;
+using WebPulse.Api.Models;
 
 namespace WebPulse.Api.Services;
 
@@ -9,14 +10,18 @@ public class PulseGenerationService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<PulseGenerationService> _logger;
-    private readonly Channel<PulseData> _pulseChannel;
+    private readonly Channel<RawComment> _pulseChannel;
     private readonly List<ICommentProvider> _providers;
 
-    public PulseGenerationService(IServiceProvider serviceProvider, ILogger<PulseGenerationService> logger, IEnumerable<ICommentProvider> providers)
+    public PulseGenerationService(
+        IServiceProvider serviceProvider, 
+        ILogger<PulseGenerationService> logger, 
+        IEnumerable<ICommentProvider> providers,
+        Channel<RawComment> channel)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _pulseChannel = Channel.CreateUnbounded<PulseData>();
+        _pulseChannel = channel;
         _providers = providers.ToList();
         
         _logger.LogInformation("PulseGenerationService initialized with {ProviderCount} providers", _providers.Count);
@@ -43,40 +48,42 @@ public class PulseGenerationService : BackgroundService
 
     private async Task ProcessPulsesAsync(CancellationToken stoppingToken)
     {
-        await foreach (var pulseData in _pulseChannel.Reader.ReadAllAsync(stoppingToken))
-        {
-            try
+        await Parallel.ForEachAsync(_pulseChannel.Reader.ReadAllAsync(stoppingToken), 
+            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = stoppingToken }, 
+            async (pulseData, ct) => 
             {
-                using var scope = _serviceProvider.CreateScope();
-                var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<PulseHub>>();
-                var sentimentService = scope.ServiceProvider.GetRequiredService<ISentimentAnalysisService>();
-                
-                var sentiment = await sentimentService.AnalyzeSentimentAsync(pulseData.Text);
-                var color = GetColorFromSentiment(sentiment);
-                
-                var pulse = new Pulse(
-                    Sentiment: sentiment,
-                    Message: pulseData.Text.Length > 100 ? pulseData.Text.Substring(0, 100) + "..." : pulseData.Text,
-                    FullText: pulseData.Text,
-                    Color: color,
-                    Source: pulseData.Source,
-                    Author: pulseData.Author,
-                    Url: pulseData.Url,
-                    Timestamp: pulseData.Timestamp
-                );
-                
-                _logger.LogDebug("Created pulse: {Text} (Sentiment: {Sentiment})", 
-                    pulse.Message, pulse.Sentiment);
-                
-                await hubContext.Clients.Group(PulseHub.PulseGroupName).SendAsync(ProviderConstants.SignalR.ReceiveMethod, pulse, stoppingToken);
-                
-                _logger.LogDebug("Sent pulse: {Text} -> {Sentiment:F2}", pulseData.Text.Substring(0, Math.Min(30, pulseData.Text.Length)), sentiment);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error processing pulse: {Text}", pulseData.Text);
-            }
-        }
+                try
+                {
+                    using var scope = _serviceProvider.CreateScope();
+                    var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<PulseHub>>();
+                    var sentimentService = scope.ServiceProvider.GetRequiredService<ISentimentAnalysisService>();
+                    
+                    var sentiment = await sentimentService.AnalyzeSentimentAsync(pulseData.Text);
+                    var color = GetColorFromSentiment(sentiment);
+                    
+                    var pulse = new Pulse(
+                        Sentiment: sentiment,
+                        Message: pulseData.Text.Length > 100 ? pulseData.Text.Substring(0, 100) + "..." : pulseData.Text,
+                        FullText: pulseData.Text,
+                        Color: color,
+                        Source: pulseData.Source,
+                        Author: pulseData.Author,
+                        Url: pulseData.Url,
+                        Timestamp: pulseData.Timestamp
+                    );
+                    
+                    _logger.LogDebug("Created pulse: {Text} (Sentiment: {Sentiment})", 
+                        pulse.Message, pulse.Sentiment);
+                    
+                    await hubContext.Clients.Group(PulseHub.PulseGroupName).SendAsync(ProviderConstants.SignalR.ReceiveMethod, pulse, ct);
+                    
+                    _logger.LogDebug("Sent pulse: {Text} -> {Sentiment:F2}", pulseData.Text.Substring(0, Math.Min(30, pulseData.Text.Length)), sentiment);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error processing pulse: {Text}", pulseData.Text);
+                }
+            });
     }
 
     private async Task PollProvidersAsync(CancellationToken stoppingToken)
@@ -85,27 +92,8 @@ public class PulseGenerationService : BackgroundService
         {
             try
             {
-                var tasks = _providers.Select(async provider =>
-                {
-                    try
-                    {
-                        var comments = await provider.GetCommentsAsync(stoppingToken);
-                        foreach (var comment in comments)
-                        {
-                            await _pulseChannel.Writer.WriteAsync(new PulseData(
-                                Text: comment.Text,
-                                Source: comment.Source,
-                                Author: comment.Author,
-                                Url: comment.Url,
-                                Timestamp: comment.Timestamp
-                            ), stoppingToken);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error polling provider {ProviderName}", provider.ProviderName);
-                    }
-                });
+                var tasks = _providers.Select(provider =>
+                    provider.GetCommentsAsync(_pulseChannel.Writer, stoppingToken));
 
                 await Task.WhenAll(tasks);
             }

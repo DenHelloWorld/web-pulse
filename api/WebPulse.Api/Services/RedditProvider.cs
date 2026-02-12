@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 using WebPulse.Api.Constants;
+using WebPulse.Api.Models;
 
 namespace WebPulse.Api.Services;
 
@@ -20,7 +22,7 @@ public class RedditProvider : ICommentProvider
         _httpClient.DefaultRequestHeaders.Add("User-Agent", ProviderConstants.Reddit.UserAgent);
     }
 
-    public async Task<IEnumerable<CommentData>> GetCommentsAsync(CancellationToken cancellationToken = default)
+    public async Task GetCommentsAsync(ChannelWriter<RawComment> writer, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -37,7 +39,7 @@ public class RedditProvider : ICommentProvider
                 var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
                 _logger.LogWarning("Reddit API returned status: {StatusCode}. Response: {Response}", 
                     response.StatusCode, errorContent);
-                return Enumerable.Empty<CommentData>();
+                return;
             }
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -65,41 +67,40 @@ public class RedditProvider : ICommentProvider
             {
                 _logger.LogError(jsonEx, "Failed to deserialize Reddit response. First 500 chars: {ResponseStart}", 
                     content.Length > 500 ? content[..500] : content);
-                return Enumerable.Empty<CommentData>();
+                return;
             }
 
             if (redditData?.Data?.Children == null)
             {
                 _logger.LogWarning("Invalid Reddit response format");
-                return Enumerable.Empty<CommentData>();
+                return;
             }
 
-            var comments = new List<CommentData>();
-            
             foreach (var child in redditData.Data.Children.Where(c => c?.Kind == "t3"))
             {
                 var post = child!.Data;
                 if (post != null && !string.IsNullOrWhiteSpace(post.Title))
                 {
                     var postText = !string.IsNullOrEmpty(post.Selftext) ? post.Selftext : post.Title;
-                    comments.Add(new CommentData(
-                        Text: post.Title,
-                        FullText: postText,
-                        Source: $"Reddit/r/{post.Subreddit}", 
-                        Timestamp: DateTimeOffset.FromUnixTimeSeconds((long)post.CreatedUtc).DateTime,
-                        Author: post.Author ?? "[deleted]",
-                        Url: string.IsNullOrEmpty(post.Url) ? $"https://reddit.com{post.Permalink}" : post.Url
-                    ));
+                    
+                    var rawComment = new RawComment
+                    {
+                        Text = post.Title,
+                        Source = $"Reddit/r/{post.Subreddit}",
+                        Author = post.Author ?? "[deleted]",
+                        Url = string.IsNullOrEmpty(post.Url) ? $"https://reddit.com{post.Permalink}" : post.Url,
+                        Timestamp = DateTimeOffset.FromUnixTimeSeconds((long)post.CreatedUtc).DateTime
+                    };
+                    
+                    await writer.WriteAsync(rawComment, cancellationToken);
                 }
             }
 
-            _logger.LogDebug("Retrieved {Count} posts from Reddit", comments.Count);
-            return comments;
+            _logger.LogDebug("Retrieved and sent {Count} posts to channel", redditData.Data.Children.Count);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error fetching data from Reddit");
-            return Enumerable.Empty<CommentData>();
         }
     }
 }
