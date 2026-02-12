@@ -5,6 +5,7 @@ public static class ProviderConstants
     public static class Reddit
     {
         public const string BaseUrl = "https://www.reddit.com";
+        public const string Subreddit = "all";
         public const string ApiEndpoint = "/r/all/new.json";
         public const string UserAgent = "WebPulse/1.0";
         public const string SourcePrefix = "Reddit/r/";

@@ -24,20 +24,49 @@ public class RedditProvider : ICommentProvider
     {
         try
         {
-            // Reddit's public JSON endpoint for /r/all/new
-            var response = await _httpClient.GetAsync($"{ProviderConstants.Reddit.BaseUrl}{ProviderConstants.Reddit.ApiEndpoint}?limit={ProviderConstants.Reddit.DefaultLimit}", cancellationToken);
+            _logger.LogInformation("Fetching posts from Reddit...");
+            
+            // Use a more reliable endpoint with explicit JSON extension
+            var endpoint = $"{ProviderConstants.Reddit.BaseUrl}/r/{ProviderConstants.Reddit.Subreddit}/new.json?limit=10&raw_json=1";
+            _logger.LogDebug("Requesting URL: {Url}", endpoint);
+            
+            var response = await _httpClient.GetAsync(endpoint, cancellationToken);
             
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("Reddit API returned status: {StatusCode}", response.StatusCode);
+                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                _logger.LogWarning("Reddit API returned status: {StatusCode}. Response: {Response}", 
+                    response.StatusCode, errorContent);
                 return Enumerable.Empty<CommentData>();
             }
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            var redditData = JsonSerializer.Deserialize<RedditResponse>(content, new JsonSerializerOptions
+            _logger.LogDebug("Received Reddit response. Length: {Length} chars", content.Length);
+            
+            // Log first 200 chars for debugging
+            _logger.LogTrace("Response start: {ResponseStart}", 
+                content.Length > 200 ? content[..200] + "..." : content);
+            
+            RedditResponse? redditData = null;
+            try 
             {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-            });
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                    PropertyNameCaseInsensitive = true,
+                    AllowTrailingCommas = true
+                };
+                
+                redditData = JsonSerializer.Deserialize<RedditResponse>(content, options);
+                _logger.LogInformation("Successfully deserialized Reddit response. Found {Count} posts", 
+                    redditData?.Data?.Children?.Count ?? 0);
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "Failed to deserialize Reddit response. First 500 chars: {ResponseStart}", 
+                    content.Length > 500 ? content[..500] : content);
+                return Enumerable.Empty<CommentData>();
+            }
 
             if (redditData?.Data?.Children == null)
             {
@@ -52,12 +81,14 @@ public class RedditProvider : ICommentProvider
                 var post = child!.Data;
                 if (post != null && !string.IsNullOrWhiteSpace(post.Title))
                 {
+                    var postText = !string.IsNullOrEmpty(post.Selftext) ? post.Selftext : post.Title;
                     comments.Add(new CommentData(
                         Text: post.Title,
-                        Source: $"{ProviderConstants.Reddit.SourcePrefix}{post.Subreddit}",
-                        Timestamp: DateTimeOffset.FromUnixTimeSeconds(post.CreatedUtc).DateTime,
-                        Author: post.Author,
-                        Url: string.Format(ProviderConstants.Reddit.PostUrlFormat, post.Permalink)
+                        FullText: postText,
+                        Source: $"Reddit/r/{post.Subreddit}", 
+                        Timestamp: DateTimeOffset.FromUnixTimeSeconds((long)post.CreatedUtc).DateTime,
+                        Author: post.Author ?? "[deleted]",
+                        Url: string.IsNullOrEmpty(post.Url) ? $"https://reddit.com{post.Permalink}" : post.Url
                     ));
                 }
             }
@@ -76,28 +107,60 @@ public class RedditProvider : ICommentProvider
 // Reddit API response models
 public class RedditResponse
 {
+    [JsonPropertyName("data")]
     public RedditData? Data { get; set; }
 }
 
 public class RedditData
 {
-    public List<RedditChild>? Children { get; set; }
+    [JsonPropertyName("children")]
+    public List<RedditChild> Children { get; set; } = new();
+    
+    [JsonPropertyName("after")]
+    public string? After { get; set; }
+    
+    [JsonPropertyName("before")]
+    public string? Before { get; set; }
 }
 
 public class RedditChild
 {
+    [JsonPropertyName("kind")]
     public string Kind { get; set; } = string.Empty;
+    
+    [JsonPropertyName("data")]
     public RedditPost? Data { get; set; }
 }
 
 public class RedditPost
 {
+    [JsonPropertyName("title")]
     public string Title { get; set; } = string.Empty;
+    
+    [JsonPropertyName("subreddit")]
     public string Subreddit { get; set; } = string.Empty;
+    
+    [JsonPropertyName("author")]
     public string Author { get; set; } = string.Empty;
+    
+    [JsonPropertyName("permalink")]
     public string Permalink { get; set; } = string.Empty;
-    public long CreatedUtc { get; set; }
+    
+    [JsonPropertyName("created_utc")]
+    public double CreatedUtc { get; set; }
+    
+    [JsonPropertyName("selftext")]
     public string Selftext { get; set; } = string.Empty;
+    
+    [JsonPropertyName("score")]
     public int Score { get; set; }
+    
+    [JsonPropertyName("num_comments")]
     public int NumComments { get; set; }
+    
+    [JsonPropertyName("url")]
+    public string Url { get; set; } = string.Empty;
+    
+    [JsonPropertyName("is_self")]
+    public bool IsSelf { get; set; }
 }

@@ -4,7 +4,16 @@ using WebPulse.Api.Constants;
 namespace WebPulse.Api.Hubs;
 
 // Наш объект данных
-public record Pulse(double Sentiment, string Message, string Color, string Source, DateTime Timestamp);
+public record Pulse(
+    double Sentiment, 
+    string Message, 
+    string FullText,
+    string Color, 
+    string Source, 
+    string Author,
+    string Url,
+    DateTime Timestamp
+);
 
 public class PulseHub : Hub
 {

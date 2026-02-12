@@ -10,7 +10,6 @@ public class PulseGenerationService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<PulseGenerationService> _logger;
     private readonly Channel<PulseData> _pulseChannel;
-    private readonly Timer _timer;
     private readonly List<ICommentProvider> _providers;
 
     public PulseGenerationService(IServiceProvider serviceProvider, ILogger<PulseGenerationService> logger, IEnumerable<ICommentProvider> providers)
@@ -19,7 +18,6 @@ public class PulseGenerationService : BackgroundService
         _logger = logger;
         _pulseChannel = Channel.CreateUnbounded<PulseData>();
         _providers = providers.ToList();
-        _timer = new Timer(GenerateTestPulse, null, Timeout.Infinite, Timeout.Infinite);
         
         _logger.LogInformation("PulseGenerationService initialized with {ProviderCount} providers", _providers.Count);
     }
@@ -36,9 +34,6 @@ public class PulseGenerationService : BackgroundService
         
         // Запускаем обработчик канала
         var processorTask = ProcessPulsesAsync(stoppingToken);
-        
-        // Запускаем генерацию тестовых данных каждые 2 секунды
-        _timer.Change(TimeSpan.Zero, TimeSpan.FromSeconds(ProviderConstants.TestGenerator.PollingIntervalSeconds));
         
         // Периодически опрашиваем провайдеров
         var providerTask = PollProvidersAsync(stoppingToken);
@@ -61,11 +56,17 @@ public class PulseGenerationService : BackgroundService
                 
                 var pulse = new Pulse(
                     Sentiment: sentiment,
-                    Message: pulseData.Text,
+                    Message: pulseData.Text.Length > 100 ? pulseData.Text.Substring(0, 100) + "..." : pulseData.Text,
+                    FullText: pulseData.Text,
                     Color: color,
                     Source: pulseData.Source,
+                    Author: pulseData.Author,
+                    Url: pulseData.Url,
                     Timestamp: pulseData.Timestamp
                 );
+                
+                _logger.LogDebug("Created pulse: {Text} (Sentiment: {Sentiment})", 
+                    pulse.Message, pulse.Sentiment);
                 
                 await hubContext.Clients.Group(PulseHub.PulseGroupName).SendAsync(ProviderConstants.SignalR.ReceiveMethod, pulse, stoppingToken);
                 
@@ -94,6 +95,8 @@ public class PulseGenerationService : BackgroundService
                             await _pulseChannel.Writer.WriteAsync(new PulseData(
                                 Text: comment.Text,
                                 Source: comment.Source,
+                                Author: comment.Author,
+                                Url: comment.Url,
                                 Timestamp: comment.Timestamp
                             ), stoppingToken);
                         }
@@ -115,29 +118,6 @@ public class PulseGenerationService : BackgroundService
         }
     }
 
-    private void GenerateTestPulse(object? state)
-    {
-        var testMessages = new[]
-        {
-            "This is absolutely amazing! 🎉",
-            "I hate this so much...",
-            "Great work everyone!",
-            "Terrible decision",
-            "Love the new features!",
-            "Worst experience ever",
-            "Excellent performance!",
-            "Awful user interface"
-        };
-
-        var randomMessage = testMessages[Random.Shared.Next(testMessages.Length)];
-        
-        _pulseChannel.Writer.TryWrite(new PulseData(
-            Text: randomMessage,
-            Source: ProviderConstants.TestGenerator.SourceName,
-            Timestamp: DateTime.UtcNow
-        ));
-    }
-
     private static string GetColorFromSentiment(float sentiment)
     {
         return sentiment switch
@@ -150,10 +130,15 @@ public class PulseGenerationService : BackgroundService
 
     public override void Dispose()
     {
-        _timer?.Dispose();
         _pulseChannel.Writer.Complete();
         base.Dispose();
     }
 }
 
-public record PulseData(string Text, string Source, DateTime Timestamp);
+public record PulseData(
+    string Text, 
+    string Source, 
+    string Author,
+    string Url,
+    DateTime Timestamp
+);

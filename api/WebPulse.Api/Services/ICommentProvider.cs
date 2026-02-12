@@ -8,8 +8,9 @@ public interface ICommentProvider
 
 public record CommentData(
     string Text,
+    string FullText,
     string Source,
     DateTime Timestamp,
-    string? Author = null,
-    string? Url = null
+    string Author,
+    string Url
 );

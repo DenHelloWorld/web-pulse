@@ -18,9 +18,6 @@ builder.Services.AddHostedService<PulseGenerationService>();
 builder.Services.AddHttpClient<RedditProvider>();
 builder.Services.AddSingleton<ICommentProvider, RedditProvider>();
 
-// Временно оставляем старый DataHarvester для совместимости
-builder.Services.AddHostedService<DataHarvester>();
-
 // 3. НАСТРОЙКА CORS
 // Это критично: без этого Angular (порт 4200) не сможет подключиться к API (порт 5xxx)
 builder.Services.AddCors(options => {
