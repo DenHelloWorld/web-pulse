@@ -1,8 +1,14 @@
+using Microsoft.ML.Data;
+
 namespace WebPulse.Api.Models;
 
 public class SentimentData
 {
+    [LoadColumn(0)]
     public string Text { get; set; } = string.Empty;
+
+    [LoadColumn(1)]
+    public bool Label { get; set; }
 }
 
 public class SentimentPrediction

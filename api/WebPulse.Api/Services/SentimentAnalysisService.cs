@@ -1,5 +1,6 @@
 using Microsoft.ML;
 using Microsoft.Extensions.ObjectPool;
+using System.IO;
 using System.Text.RegularExpressions;
 using WebPulse.Api.Models;
 
@@ -54,14 +55,15 @@ public class SentimentAnalysisService : ISentimentAnalysisService
     private ObjectPool<PredictionEngineWrapper> InitializeEnginePool()
     {
         var mlContext = new MLContext();
-        var modelPath = Path.Combine(AppContext.BaseDirectory, "Models", "sentiment.onnx");
-        var pipeline = mlContext.Transforms.ApplyOnnxModel(
-            modelFile: modelPath,
-            inputColumnNames: new[] { "Text" },
-            outputColumnNames: new[] { "Probability" },
-            gpuDeviceId: null,
-            fallbackToCpu: true);
-        var model = pipeline.Fit(mlContext.Data.LoadFromEnumerable(new List<SentimentData>()));
+        var modelPath = Path.Combine(AppContext.BaseDirectory, "Models", "sentiment.zip");
+
+        if (!File.Exists(modelPath))
+        {
+            _logger.LogWarning("🚨 Файл модели не найден по пути: {Path}. Будет использован Dummy-анализ.", modelPath);
+        }
+
+        ITransformer model = mlContext.Model.Load(modelPath, out var modelInputSchema);
+
         return ObjectPool.Create(new PredictionEnginePolicy(mlContext, model));
     }
 
@@ -69,26 +71,23 @@ public class SentimentAnalysisService : ISentimentAnalysisService
     {
         if (string.IsNullOrWhiteSpace(text)) return 0;
 
-        // Data preprocessing: clean text
-        string cleanText = text.Replace("\n", " ").Replace("\r", " ").Trim();
-        cleanText = Regex.Replace(cleanText, @"\s+", " "); // Collapse multiple spaces
+        string cleanText = Regex.Replace(text.Replace("\n", " ").Replace("\r", " ").Trim(), @"\s+", " ");
 
         var wrapper = _enginePool.Get();
         try
         {
             var prediction = wrapper.Engine.Predict(new SentimentData { Text = cleanText });
-            float score = prediction.Probability > 0.5f 
-                ? prediction.Probability 
-                : -prediction.Probability;
-                
-            _logger.LogDebug("ML.NET Analysis: '{Text}' -> {Score:F2} (Confidence: {Prob:F2})", 
-                cleanText.Substring(0, Math.Min(30, cleanText.Length)), score, prediction.Probability);
-            
+
+            float score = (prediction.Probability - 0.5f) * 2;
+
+            _logger.LogDebug("ML.NET Analysis: '{Text}' -> Score: {Score:F2}",
+                cleanText.Length > 30 ? cleanText[..30] : cleanText, score);
+
             return score;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "ML.NET ONNX Prediction failed");
+            _logger.LogError(ex, "ML.NET Prediction failed. Falling back to dummy.");
             return await AnalyzeSentimentDummyAsync(text);
         }
         finally
@@ -100,7 +99,7 @@ public class SentimentAnalysisService : ISentimentAnalysisService
     private async Task<float> AnalyzeSentimentDummyAsync(string text)
     {
         await Task.Delay(1);
-        
+
         // Улучшенная dummy логика как fallback
         var sentimentWords = new Dictionary<string, float>
         {
